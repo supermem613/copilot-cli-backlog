@@ -1,7 +1,7 @@
 {
   "name": "backlog",
   "description": "Workspace queue backlog for GitHub Copilot CLI, with deterministic slash commands, in-conversation tools, and a live sidecar viewer.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "author": {
     "name": "Marcus Markiewicz"
   },

@@ -1,6 +1,6 @@
 {
   "name": "backlog",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Copilot CLI extension for managing workspace queue backlogs with a live sidecar viewer.",
   "type": "module",
   "private": false,
