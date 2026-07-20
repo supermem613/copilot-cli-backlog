@@ -51,6 +51,98 @@ function formatItems(rows, queueId) {
   return [`Queue '${queueId}' pending items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
 }
 
+function itemData(item) {
+  return {
+    id: item.id,
+    description: item.description,
+    position: item.position,
+  };
+}
+
+function commandError(message) {
+  return {
+    ok: false,
+    data: {
+      error: String(message).replace(/^Error: /, ""),
+    },
+  };
+}
+
+export async function executeBacklogCommand(rawText, { cwd = null } = {}) {
+  const { cmd, args, isTop } = parseBacklogCommand(rawText);
+  const resolveQueueForItemOps = () => resolveItemCommandContext({ cwd });
+
+  if (cmd === "add") {
+    const description = args.join(" ").trim();
+    if (!description) return commandError("Description required. Usage: /backlog add <description>");
+    const queueContext = resolveQueueForItemOps();
+    if (queueContext.error) return commandError(queueContext.error);
+    const item = addItem(description, isTop, queueContext.queueId);
+    return {
+      ok: true,
+      data: {
+        queueId: queueContext.queueId,
+        item: itemData({ ...item, description }),
+        output: `Added: '${description}' [id: ${item.id}, position: ${item.position}]`,
+      },
+    };
+  }
+
+  if (cmd === "list") {
+    const queueId = args[0]?.trim();
+    const queueContext = queueId
+      ? (getQueue(queueId) ? { queueId } : { error: `Queue '${queueId}' not found` })
+      : resolveQueueForItemOps();
+    if (queueContext.error) return commandError(queueContext.error);
+    const items = listPendingItems(queueContext.queueId);
+    return {
+      ok: true,
+      data: {
+        queueId: queueContext.queueId,
+        items: items.map(itemData),
+        output: formatItems(items, queueContext.queueId),
+      },
+    };
+  }
+
+  if (cmd === "done") {
+    const queueContext = resolveQueueForItemOps();
+    if (queueContext.error) return commandError(queueContext.error);
+    const item = markDone(args[0], queueContext.queueId);
+    if (!item) return commandError(`Item '${args[0]}' not found`);
+    return {
+      ok: true,
+      data: {
+        queueId: queueContext.queueId,
+        item: itemData(item),
+        output: `Marked '${item.description}' as done`,
+      },
+    };
+  }
+
+  if (cmd === "edit") {
+    const queueContext = resolveQueueForItemOps();
+    if (queueContext.error) return commandError(queueContext.error);
+    const [ref, ...rest] = args;
+    const item = editItem(ref, rest.join(" ").trim(), queueContext.queueId);
+    if (!item) return commandError(`Item '${ref}' not found or empty description`);
+    return {
+      ok: true,
+      data: {
+        queueId: queueContext.queueId,
+        item: itemData(item),
+        output: `Updated '${item.description}'`,
+      },
+    };
+  }
+
+  const result = await handleBacklogCommand(rawText, { cwd });
+  return {
+    ok: true,
+    data: typeof result === "string" ? { output: result } : result,
+  };
+}
+
 export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
   const { cmd, args, isTop } = parseBacklogCommand(rawText);
   const resolveQueueForItemOps = () => resolveItemCommandContext({ cwd });

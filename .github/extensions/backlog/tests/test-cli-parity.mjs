@@ -133,8 +133,23 @@ if (statusResult.error) {
   } catch (error) {
     assert(false, `add stdout should be parseable JSON: ${error.message}`);
   }
-  const editableId = cliAddEnvelope?.data?.output?.match(/\[id: ([^,\]]+)/)?.[1];
-  assert(editableId, `add output should include an editable id, got: ${cliAddEnvelope?.data?.output}`);
+  const editableId = cliAddEnvelope?.data?.item?.id;
+  assert(editableId, `add envelope should include an editable item id, got: ${JSON.stringify(cliAddEnvelope?.data?.item)}`);
+  assertEqual(cliAddEnvelope?.data?.item?.description, "editable cli item", "add envelope should include the added item description");
+  assertEqual(typeof cliAddEnvelope?.data?.item?.position, "number", "add envelope should include a numeric item position");
+  const cliListResult = spawnSync(process.execPath, [cliPath, "list", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(cliListResult.status, 0, "list command should exit 0");
+  let cliListEnvelope;
+  try {
+    cliListEnvelope = JSON.parse(cliListResult.stdout);
+  } catch (error) {
+    assert(false, `list stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(cliListEnvelope?.data?.queueId, "cli-init-queue", "list envelope should include the initialized queue id");
+  assertEqual(cliListEnvelope?.data?.items?.[0]?.description, "editable cli item", "list envelope should include the editable item description");
   const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -149,8 +164,22 @@ if (statusResult.error) {
   if (cliEditEnvelope) {
     assertEqual(cliEditEnvelope.ok, true, "edit envelope should report ok=true");
     assertEqual(cliEditEnvelope.command, "edit", "edit envelope should identify the command");
-    assert(/Updated 'edited cli item'/.test(cliEditEnvelope.data.output), "edit envelope should confirm the updated description");
+    assertEqual(cliEditEnvelope?.data?.item?.description, "edited cli item", "edit envelope should record the updated description");
   }
+
+  const missingDoneResult = spawnSync(process.execPath, [cliPath, "done", "missing-item", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(missingDoneResult.status, 1, "done command should exit non-zero for missing items");
+  let missingDoneEnvelope;
+  try {
+    missingDoneEnvelope = JSON.parse(missingDoneResult.stdout);
+  } catch (error) {
+    assert(false, `done stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(missingDoneEnvelope?.ok, false, "missing done envelope should report ok=false");
+  assertEqual(missingDoneEnvelope?.data?.error, "Item 'missing-item' not found", "missing done envelope should report the missing item error");
 
   const originalExitCode = process.exitCode;
   const originalStdoutWrite = process.stdout.write;
