@@ -25,7 +25,7 @@ const p5 = parseBacklogCommand("init");
 assertEqual(p5.cmd, "init", "init command parsed");
 
 const unboundAddOut = await handleBacklogCommand("add no dumping ground");
-assert(/Unbound queue resolution/.test(unboundAddOut), `add without cwd refuses implicit queue, got: ${unboundAddOut}`);
+assert(/Unbound queue resolution/.test(unboundAddOut.output), `add without cwd refuses implicit queue, got: ${unboundAddOut.output}`);
 const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
 assert(queueTable, "queue table exists for queue-backed backlog items");
 const initScope = join(sandboxDir, "soda");
@@ -43,23 +43,23 @@ assertEqual(initAgainOut.createdBinding, false, "init reuses an existing binding
 assertEqual(listQueueScopes("soda").length, 1, "init is idempotent for the same workspace");
 
 const addOut = await handleBacklogCommand("add hello world", { cwd: initScope });
-assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmation, got: ${addOut}`);
+assert(addOut.output.startsWith("Added: 'hello world'"), `add command returns confirmation, got: ${addOut.output}`);
 
 const listOut = await handleBacklogCommand("list", { cwd: initScope });
-assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
-assert(listOut.startsWith("Queue 'soda' pending items:"), `list names the resolved queue, got: ${listOut}`);
+assert(/hello world/.test(listOut.output), `list shows added item, got: ${listOut.output}`);
+assert(listOut.output.startsWith("Queue 'soda' pending items:"), `list names the resolved queue, got: ${listOut.output}`);
 const listByQueueOut = await handleBacklogCommand("list soda");
-assert(/Queue 'soda' pending items:[\s\S]*hello world/.test(listByQueueOut), `list accepts an explicit queue id, got: ${listByQueueOut}`);
-const firstId = addOut.match(/\[id: ([^,\]]+)/)?.[1];
+assert(/Queue 'soda' pending items:[\s\S]*hello world/.test(listByQueueOut.output), `list accepts an explicit queue id, got: ${listByQueueOut.output}`);
+const firstId = addOut.item.id;
 const editOut = await handleBacklogCommand(`edit ${firstId} hello edited`, { cwd: initScope });
-assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
+assert(/Updated 'hello edited'/.test(editOut.output), `edit command updates item, got: ${editOut.output}`);
 await handleBacklogCommand("add second item", { cwd: initScope });
 const moveOut = await handleBacklogCommand("move 2 1", { cwd: initScope });
 assert(/Moved 'second item' to position 1/.test(moveOut), `move command repositions item, got: ${moveOut}`);
 const movedListOut = await handleBacklogCommand("list", { cwd: initScope });
-assert(/#1 \[[^\]]+\] second item/.test(movedListOut), `list reflects moved item order, got: ${movedListOut}`);
+assert(/#1 \[[^\]]+\] second item/.test(movedListOut.output), `list reflects moved item order, got: ${movedListOut.output}`);
 const missingQueueOut = await handleBacklogCommand("list missing-queue");
-assert(/Queue 'missing-queue' not found/.test(missingQueueOut), `list reports unknown explicit queue ids, got: ${missingQueueOut}`);
+assert(/Queue 'missing-queue' not found/.test(missingQueueOut.output), `list reports unknown explicit queue ids, got: ${missingQueueOut.output}`);
 
 const gatedId = firstId;
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", gatedId);

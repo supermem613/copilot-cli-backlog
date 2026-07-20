@@ -23,25 +23,25 @@ bindQueueScope(queueA, scopeA);
 bindQueueScope(queueB, scopeB);
 
 const addOut = await handleBacklogCommand("add first bound item", { cwd: scopeA });
-assert(/Added:/.test(addOut), `add command confirms item creation, got: ${addOut}`);
+assert(/Added:/.test(addOut.output), `add command confirms item creation, got: ${addOut.output}`);
 
 const insertedRow = db.prepare("SELECT queue_id, description FROM items ORDER BY position").get();
 assertEqual(insertedRow.queue_id, queueA.id, "add uses the resolver-selected queue for a bound cwd");
 assertEqual(insertedRow.description, "first bound item", "add stores the expected description");
 
 const listAOut = await handleBacklogCommand("list", { cwd: scopeA });
-assert(listAOut.includes("first bound item"), `list for queue A shows the bound item, got: ${listAOut}`);
+assert(listAOut.output.includes("first bound item"), `list for queue A shows the bound item, got: ${listAOut.output}`);
 
 const listBOut = await handleBacklogCommand("list", { cwd: scopeB });
-assert(!listBOut.includes("first bound item"), `list for queue B should not include queue A items, got: ${listBOut}`);
+assert(!listBOut.output.includes("first bound item"), `list for queue B should not include queue A items, got: ${listBOut.output}`);
 
-assertEqual(listBOut, `Queue '${queueB.id}' is empty`, `list should not see queue A items from queue B scope, got: ${listBOut}`);
+assertEqual(listBOut.output, `Queue '${queueB.id}' is empty`, `list should not see queue A items from queue B scope, got: ${listBOut.output}`);
 
 const pendingBOut = await handleBacklogCommand("pending", { cwd: scopeB });
 assertEqual(pendingBOut, "0", `pending should ignore queue A items when resolving queue B scope, got: ${pendingBOut}`);
 
 const doneBOut = await handleBacklogCommand("done 1", { cwd: scopeB });
-assert(/Error: Item '1' not found/.test(doneBOut), `done should not mutate queue A items from queue B scope, got: ${doneBOut}`);
+assert(/Error: Item '1' not found/.test(doneBOut.output), `done should not mutate queue A items from queue B scope, got: ${doneBOut.output}`);
 
 const removeBOut = await handleBacklogCommand("remove 1", { cwd: scopeB });
 assert(/Error: Item '1' not found/.test(removeBOut), `remove should not mutate queue A items from queue B scope, got: ${removeBOut}`);
@@ -53,9 +53,9 @@ assertEqual(remainingRows, 1, "clear leaves queue A items intact when resolving 
 
 const unboundScope = join(sandboxDir, "unbound-scope");
 const unboundListOut = await handleBacklogCommand("list", { cwd: unboundScope });
-assert(/Unbound queue resolution/.test(unboundListOut), `unbound list reports missing binding, got: ${unboundListOut}`);
+assert(/Unbound queue resolution/.test(unboundListOut.output), `unbound list reports missing binding, got: ${unboundListOut.output}`);
 const unboundAddOut = await handleBacklogCommand("add should not bind implicitly", { cwd: unboundScope });
-assert(/Unbound queue resolution/.test(unboundAddOut), `unbound add refuses implicit binding, got: ${unboundAddOut}`);
+assert(/Unbound queue resolution/.test(unboundAddOut.output), `unbound add refuses implicit binding, got: ${unboundAddOut.output}`);
 
 const joinConfig = createBacklogJoinConfig({
   getActiveSessionId: () => "auto-bound-items-session",

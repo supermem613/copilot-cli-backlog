@@ -103,7 +103,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
     initBacklog(databaseDir);
 
-    const [{ executeBacklogCommand }] = await Promise.all([
+    const [{ handleBacklogCommand }] = await Promise.all([
       import("./commands.mjs"),
     ]);
 
@@ -116,14 +116,16 @@ export async function runCli(argv = process.argv.slice(2)) {
     } else if (commandName === "schema") {
       envelope.data = createSchemaEnvelope();
     } else if (commandName === "doctor") {
-      const result = await executeBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
-      envelope.ok = result.ok;
-      envelope.data = result.data;
+      const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
+      envelope.data = typeof result === "string" ? { output: result } : result;
     } else if (getSlashCommandNames().includes(commandName)) {
       const rawText = [commandName, ...parsed.args].join(" ").trim();
-      const result = await executeBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
-      envelope.ok = result.ok;
-      envelope.data = result.data;
+      const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
+      if (result && typeof result === "object" && result.ok === false) {
+        envelope.ok = false;
+        delete result.ok;
+      }
+      envelope.data = typeof result === "string" ? { output: result } : result;
     } else {
       envelope.ok = false;
       envelope.data = {

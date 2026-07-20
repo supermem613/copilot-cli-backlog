@@ -65,7 +65,10 @@ export function createBacklogJoinConfig({
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
           const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd });
-          log(result);
+          const message = typeof result === "string" || result == null
+            ? result
+            : (result.output ?? result.message ?? result);
+          log(message);
         },
       },
     ],
