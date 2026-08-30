@@ -551,6 +551,37 @@ export function listQueues() {
   return db.prepare("SELECT * FROM queues ORDER BY name, created_at").all().map(queueRowToObject);
 }
 
+export function listQueueSummaries() {
+  return db.prepare(`
+    SELECT
+      q.*,
+      COALESCE(counts.item_count, 0) AS item_count,
+      COALESCE(counts.item_counts_json, '{}') AS item_counts_json
+    FROM queues q
+    LEFT JOIN (
+      SELECT
+        queue_id,
+        SUM(status_count) AS item_count,
+        json_group_object(status, status_count) AS item_counts_json
+      FROM (
+        SELECT queue_id, COALESCE(status, 'unknown') AS status, COUNT(*) AS status_count
+        FROM items
+        WHERE queue_id IS NOT NULL
+        GROUP BY queue_id, COALESCE(status, 'unknown')
+      )
+      GROUP BY queue_id
+    ) counts ON counts.queue_id = q.id
+    ORDER BY q.name, q.created_at
+  `).all().map((row) => {
+    const { item_count, item_counts_json, ...queueRow } = row;
+    return {
+      ...queueRowToObject(queueRow),
+      itemCount: item_count,
+      itemCounts: JSON.parse(item_counts_json),
+    };
+  });
+}
+
 export function updateQueue(queueId, { name = undefined, description = undefined, metadata = undefined } = {}) {
   const updates = [];
   const params = [];

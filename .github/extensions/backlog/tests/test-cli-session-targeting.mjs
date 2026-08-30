@@ -47,6 +47,6 @@ assert(listEnvelope?.data?.output?.includes(distinctItem), `list output should i
 
 const statusEnvelope = runCli(["status"]);
 assertEqual(statusEnvelope?.data?.queueId, initEnvelope?.data?.queueId, "status should resolve the same queue id as init");
-assertEqual(statusEnvelope?.data?.itemCounts?.pending, 1, "status should report one pending item");
+assertEqual(statusEnvelope?.data?.itemCounts?.pendingItems, 1, "status should report one pending item");
 
 done("test-cli-session-targeting");

@@ -15,7 +15,31 @@ const ELEVATING_HANDLER_KEYS = [
 ];
 
 function getInvocationCwd(args, invocation) {
-  return args?.cwd || invocation?.cwd || invocation?.context?.cwd || null;
+  return args?.cwd || invocation?.cwd || invocation?.context?.cwd || process.cwd();
+}
+
+// Every human-facing surface names an item by "id" while the tool schema calls
+// it `ref`, so agents reasonably send either. Accept both and resolve them here
+// rather than in the schema: a schema-level rejection is reported by the CLI as
+// a bare "Tool execution failed", which cannot be told apart from a genuine
+// execution error. Returning a domain message keeps the two cases distinct.
+function resolveItemReference(args, toolName) {
+  const normalize = (value) => {
+    if (value === undefined || value === null) return null;
+    const text = String(value).trim();
+    return text === "" ? null : text;
+  };
+  const ref = normalize(args?.ref);
+  const id = normalize(args?.id);
+
+  if (ref && id && ref !== id) {
+    return { error: `Error: ${toolName} received both 'ref' ('${ref}') and 'id' ('${id}'). Pass only one.` };
+  }
+  const resolved = ref || id;
+  if (!resolved) {
+    return { error: `Error: ${toolName} requires an item reference in 'ref' (or its alias 'id'), as an item ID or position number.` };
+  }
+  return { ref: resolved };
 }
 
 export function describeJoinPrivilege(config) {
@@ -64,7 +88,7 @@ export function createBacklogJoinConfig({
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
-          const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd });
+          const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd || process.cwd() });
           const message = typeof result === "string" || result == null
             ? result
             : (result.output ?? result.message ?? result);
@@ -97,13 +121,17 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
+          const reference = resolveItemReference(args, "backlog_done");
+          if (reference.error) {
+            return { message: reference.error, ok: false };
+          }
           const queueContext = resolveItemCommandContext({ cwd });
           if (queueContext.error) {
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
-          const item = markDone(args.ref, queueContext.queueId);
+          const item = markDone(reference.ref, queueContext.queueId);
           if (!item) {
-            return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+            return { message: `Error: Item '${reference.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
           return { message: `Marked '${item.description}' as done`, resolution: queueContext.resolution, queueId: queueContext.queueId, item };
         },

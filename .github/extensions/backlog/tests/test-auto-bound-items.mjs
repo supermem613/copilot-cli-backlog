@@ -1,6 +1,7 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { db, createQueue } from "../db.mjs";
 import { handleBacklogCommand } from "../commands.mjs";
 import { bindQueueScope } from "../queue-resolver.mjs";
@@ -78,5 +79,43 @@ assertResolutionBlock(listToolOut, "backlog_list", queueB.id);
 const doneTool = joinConfig.tools.find((tool) => tool.name === "backlog_done");
 const doneToolOut = await doneTool.handler({ ref: "1" }, { sessionId: "auto-bound-items-session", cwd: scopeA });
 assertResolutionBlock(doneToolOut, "backlog_done", queueA.id);
+
+// Regression guard for the missing cwd invocation path. When the CLI dispatches
+// a backlog item command without threading a workspace path, both the slash
+// handler and the agent tool must fall back to the process working directory
+// instead of failing with an unbound resolution. This mirrors how status
+// already defaults its scope.
+const scopeC = join(sandboxDir, "scope-c");
+mkdirSync(scopeC, { recursive: true });
+const queueC = createQueue({ id: "queue-c", name: "Queue C" });
+bindQueueScope(queueC, scopeC);
+await handleBacklogCommand("add cwd fallback item", { cwd: scopeC });
+
+const originalCwd = process.cwd();
+process.chdir(scopeC);
+try {
+  const fallbackListTool = joinConfig.tools.find((tool) => tool.name === "backlog_list");
+  const fallbackToolOut = await fallbackListTool.handler({}, { sessionId: "auto-bound-items-session" });
+  assertEqual(fallbackToolOut.queueId, queueC.id, "backlog_list falls back to the process working directory when no cwd is supplied");
+  assert(
+    fallbackToolOut.items.some((item) => item.description === "cwd fallback item"),
+    `backlog_list cwd fallback lists the bound queue item, got: ${JSON.stringify(fallbackToolOut.items)}`,
+  );
+
+  const captured = [];
+  const fallbackSlashConfig = createBacklogJoinConfig({
+    getActiveSessionId: () => "auto-bound-items-session",
+    log: (message) => captured.push(message),
+    syncSidecarVisibility: () => {},
+    markDone,
+    handleBacklogCommand,
+  });
+  await fallbackSlashConfig.commands[0].handler({ args: "list" });
+  const slashMessage = captured.join("\n");
+  assert(!/Unbound queue resolution/.test(slashMessage), `slash list cwd fallback avoids the unbound error, got: ${slashMessage}`);
+  assert(/cwd fallback item/.test(slashMessage), `slash list cwd fallback lists the bound queue item, got: ${slashMessage}`);
+} finally {
+  process.chdir(originalCwd);
+}
 
 done("test-auto-bound-items");

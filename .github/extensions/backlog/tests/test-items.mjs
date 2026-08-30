@@ -38,6 +38,7 @@ assertEqual(getPendingCount(queueId), 4, "pending count = 4 after --top add");
 
 const d = markDone("1", queueId);
 assertEqual(d.description, "urgent task", "done by position 1 marks urgent task done");
+assertEqual(d.status, "done", "done envelope reports status done, not the pre-update pending row");
 assertEqual(getPendingCount(queueId), 3, "pending count drops to 3 after done");
 assertEqual(getTopItem(queueId).description, "first task", "first task back at top after done");
 

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createQueue } from "../db.mjs";
+import { createQueue, db } from "../db.mjs";
 import { addItem, markDone } from "../items.mjs";
 import { bindQueueScope, describeBacklogStatus } from "../queue-resolver.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
@@ -14,9 +14,13 @@ import { runCli } from "../cli.mjs";
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-parity-"));
 const initDir = mkdtempSync(join(tmpdir(), "cli-init-"));
+const topInitDir = mkdtempSync(join(tmpdir(), "cli-top-init-"));
+const topSandboxDir = mkdtempSync(join(tmpdir(), "cli-top-sandbox-"));
 process.on("exit", () => {
   try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
   try { rmSync(initDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(topInitDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(topSandboxDir, { recursive: true, force: true }); } catch {}
 });
 
 const queue = createQueue({ id: "queue-cli-parity", name: "CLI Parity Queue" });
@@ -102,7 +106,67 @@ if (statusResult.error) {
     assertEqual(helpEnvelope.ok, true, "help envelope should report ok=true");
     assertEqual(helpEnvelope.command, "help", "help envelope should identify the command");
     assert(/Usage: backlog <command>/.test(helpEnvelope.data.help), "help envelope should contain help text in data.help");
+    assert(
+      helpEnvelope.data.commands.some((command) => command.name === "queues"),
+      "default help data should expose runnable commands as structured entries",
+    );
   }
+
+  for (const helpArgs of [["help", "queue"], ["queue", "--help"]]) {
+    const targetedHelpResult = spawnSync(process.execPath, [cliPath, ...helpArgs, "--db-dir", sandboxDir], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    assertEqual(targetedHelpResult.status, 0, `${helpArgs.join(" ")} should exit 0`);
+    const targetedHelpEnvelope = JSON.parse(targetedHelpResult.stdout);
+    assertEqual(targetedHelpEnvelope.data.command.scope, "cli", `${helpArgs.join(" ")} should expose CLI metadata`);
+    assert(
+      targetedHelpEnvelope.data.command.usage.startsWith("backlog queue"),
+      `${helpArgs.join(" ")} should expose CLI usage`,
+    );
+    assert(
+      targetedHelpEnvelope.data.help.includes("Usage: backlog queue"),
+      `${helpArgs.join(" ")} should render CLI help text`,
+    );
+  }
+
+  const commandsResult = spawnSync(process.execPath, [cliPath, "commands", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(commandsResult.status, 0, "commands command should exit 0");
+  const commandsEnvelope = JSON.parse(commandsResult.stdout);
+  assertEqual(commandsEnvelope.ok, true, "commands envelope should report ok=true");
+  assert(
+    commandsEnvelope.data.commands.some((command) => command.name === "queues"),
+    "commands data should expose the direct queue-list command",
+  );
+  assert(
+    commandsEnvelope.data.commands.some((command) => command.name === "queue"),
+    "commands data should expose queue inspection",
+  );
+  const queueCommand = commandsEnvelope.data.commands.find((command) => command.name === "queue");
+  assertEqual(queueCommand?.scope, "cli", "structured command entries should identify the CLI surface");
+  assert(
+    queueCommand?.usage.startsWith("backlog queue"),
+    "structured command entries should show CLI usage instead of slash usage",
+  );
+
+  createQueue({ id: "add", name: "Reserved ID Queue" });
+  const reservedQueueResult = await handleBacklogCommand("queue list add");
+  assertEqual(reservedQueueResult.queue.id, "add", "queue list <id> should inspect queue ids that match mutation verbs");
+
+  createQueue({ id: "legacy-status", name: "Legacy Status Queue" });
+  db.prepare(`
+    INSERT INTO items (id, description, position, queue_id, status)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("legacy-null-status", "legacy null status item", 1, "legacy-status", null);
+  const legacyQueueList = await handleBacklogCommand("queue list");
+  const legacyQueueSummary = legacyQueueList.queues.find((entry) => entry.id === "legacy-status");
+  assertEqual(legacyQueueSummary.itemCount, 1, "queue summaries should count legacy items with null status");
+  assertEqual(legacyQueueSummary.itemCounts.unknown, 1, "queue summaries should expose null status as unknown");
+  const legacyQueueDetail = await handleBacklogCommand("queue legacy-status");
+  assertEqual(legacyQueueDetail.items[0].status, "unknown", "queue details should expose null status as unknown");
 
   const initResult = spawnSync(process.execPath, [cliPath, "init", "cli-init-queue", "CLI Init Queue", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
@@ -152,6 +216,90 @@ if (statusResult.error) {
   assertEqual(cliListEnvelope?.data?.queueId, "cli-init-queue", "list envelope should expose the resolved queue id");
   assertEqual(cliListEnvelope?.data?.items?.[0]?.description, "editable cli item", "list envelope should expose pending items as objects");
 
+  const unsupportedAddFlagsResult = spawnSync(process.execPath, [cliPath, "add", "unsupported add flag item", "--unsupported-flag", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddFlagsResult.status, 1, `unsupported add flags should exit non-zero expected 1 got ${unsupportedAddFlagsResult.status}`);
+  let unsupportedAddFlagsEnvelope;
+  try {
+    unsupportedAddFlagsEnvelope = JSON.parse(unsupportedAddFlagsResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(unsupportedAddFlagsEnvelope?.ok, false, `unsupported add flags should report ok=false expected false got ${unsupportedAddFlagsEnvelope?.ok}`);
+  const usageText = unsupportedAddFlagsEnvelope?.data?.help || unsupportedAddFlagsEnvelope?.data?.usage || unsupportedAddFlagsEnvelope?.data?.message;
+  assertEqual(usageText, "Usage: backlog add [--top] <description>", "unsupported add flags usage guidance should advertise the supported --top form");
+  const topQueueInitResult = spawnSync(process.execPath, [cliPath, "init", "top-cli-queue", "Top CLI Queue", "--cwd", topInitDir, "--db-dir", topSandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(topQueueInitResult.status, 0, "isolated top add coverage should init queue exit 0");
+  const topAddResult = spawnSync(process.execPath, [cliPath, "add", "--top", "top cli item", "--cwd", topInitDir, "--db-dir", topSandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(topAddResult.status, 0, `top add should exit 0 expected 0 got ${topAddResult.status}`);
+  let topAddEnvelope;
+  try {
+    topAddEnvelope = JSON.parse(topAddResult.stdout);
+  } catch (error) {
+    assert(false, `top add stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(topAddEnvelope?.ok, true, `top add should report ok=true expected true got ${topAddEnvelope?.ok}`);
+  assertEqual(topAddEnvelope?.data?.item?.description, "top cli item", "top add envelope should expose the created item");
+  const unsupportedAddListResult = spawnSync(process.execPath, [cliPath, "list", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddListResult.status, 0, "unsupported add flags should keep list command exit 0");
+  let unsupportedAddListEnvelope;
+  try {
+    unsupportedAddListEnvelope = JSON.parse(unsupportedAddListResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags list stdout should be parseable JSON: ${error.message}`);
+  }
+  const pendingQueueLength = unsupportedAddListEnvelope?.data?.items?.length ?? 0;
+  assertEqual(pendingQueueLength, 1, `pending queue expected 1 got ${pendingQueueLength}`);
+
+  const queuesResult = spawnSync(process.execPath, [cliPath, "queues", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(queuesResult.status, 0, "queues command should exit 0");
+  const queuesEnvelope = JSON.parse(queuesResult.stdout);
+  const cliQueueSummary = queuesEnvelope.data.queues.find((entry) => entry.id === "cli-init-queue");
+  assertEqual(cliQueueSummary?.itemCount, 1, "queues data should expose the total item count");
+  assertEqual(cliQueueSummary?.itemCounts?.pending, 1, "queues data should expose counts by status");
+
+  const queueDetailResult = spawnSync(process.execPath, [cliPath, "queue", "cli-init-queue", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(queueDetailResult.status, 0, "queue detail command should exit 0");
+  const queueDetailEnvelope = JSON.parse(queueDetailResult.stdout);
+  assertEqual(queueDetailEnvelope.data.queue.id, "cli-init-queue", "queue detail should expose queue metadata");
+  assertEqual(queueDetailEnvelope.data.items[0].status, "pending", "queue detail should expose item status");
+  assertEqual(queueDetailEnvelope.data.items[0].priority, 0, "queue detail should expose item priority");
+  assert(queueDetailEnvelope.data.items[0].created_at, "queue detail should expose item creation time");
+  assert(queueDetailEnvelope.data.items[0].updated_at, "queue detail should expose item update time");
+
+  const queueDetailListResult = spawnSync(process.execPath, [cliPath, "queue", "cli-init-queue", "list", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(queueDetailListResult.status, 0, "queue detail list form should exit 0");
+  const queueDetailListEnvelope = JSON.parse(queueDetailListResult.stdout);
+  assertEqual(queueDetailListEnvelope.data.items[0].id, editableId, "queue detail list form should expose the same items");
+
+  const queueListDetailResult = spawnSync(process.execPath, [cliPath, "queue", "list", "queue-cli-parity", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(queueListDetailResult.status, 0, "queue list detail form should exit 0");
+  const queueListDetailEnvelope = JSON.parse(queueListDetailResult.stdout);
+  assertEqual(queueListDetailEnvelope.data.items[0].status, "done", "queue details should include completed items");
+
   const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -193,7 +341,10 @@ if (statusResult.error) {
   if (unknownEnvelope) {
     assertEqual(unknownEnvelope.ok, false, "unknown CLI commands should report ok=false");
     assertEqual(unknownEnvelope.command, "frobnicate", "unknown CLI commands should identify the attempted command");
-    assertEqual(unknownEnvelope.data.knownCommands.join(","), getSlashCommandNames().join(","), "unknown CLI command output lists the runnable slash subcommands");
+    assert(
+      unknownEnvelope.data.knownCommands.includes("help") && unknownEnvelope.data.knownCommands.includes("queues"),
+      "unknown CLI command output lists shared commands and CLI helpers",
+    );
   }
 
   const missingDoneResult = spawnSync(process.execPath, [cliPath, "done", "missing-item", "--cwd", initDir, "--db-dir", sandboxDir], {

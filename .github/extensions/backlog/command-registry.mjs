@@ -11,13 +11,15 @@ const commandDefinitions = [
     name: "add",
     scope: "slash",
     description: "Add a backlog item.",
-    usage: "/backlog add <description>",
+    usage: "/backlog add [--top] <description>",
+    allowedFlags: ["--top"],
   },
   {
     name: "list",
     scope: "slash",
-    description: "List pending items in the resolved or named queue.",
-    usage: "/backlog list [queue-id]",
+    description: "List items in the resolved or named queue; default is pending-only, and unrecognized flags are rejected.",
+    usage: "/backlog list [queue-id] [--status <value>]",
+    allowedFlags: ["--status"],
   },
   {
     name: "move",
@@ -71,7 +73,7 @@ const commandDefinitions = [
     name: "queue",
     scope: "slash",
     description: "Create, inspect, and rename backlog queues.",
-    usage: "/backlog queue list|add|create|edit|rename",
+    usage: "/backlog queue list [queue-id]|<queue-id> [list]|add|create|edit|rename",
   },
   {
     name: "show",
@@ -121,6 +123,18 @@ const commandDefinitions = [
     description: "Show the backlog command and tool schema.",
     usage: "backlog schema",
   },
+  {
+    name: "commands",
+    scope: "cli",
+    description: "List CLI commands as structured data.",
+    usage: "backlog commands",
+  },
+  {
+    name: "queues",
+    scope: "cli",
+    description: "List queues with item counts by status.",
+    usage: "backlog queues",
+  },
 ];
 
 const toolDefinitions = [
@@ -136,14 +150,14 @@ const toolDefinitions = [
   },
   {
     name: "backlog_done",
-    description: "Mark a backlog item as done by ID or position number.",
+    description: "Mark a backlog item as done by item ID or position number. Pass the item in `ref`; `id` is accepted as an alias.",
     parameters: {
       type: "object",
       properties: {
         ref: { type: "string", description: "Item ID or position number" },
+        id: { type: "string", description: "Alias for ref. Item ID or position number" },
         cwd: { type: "string", description: "Workspace directory to inspect" },
       },
-      required: ["ref"],
     },
   },
   {
@@ -186,6 +200,20 @@ export function getCliCommandNames() {
   return getCommandDefinitions().filter((command) => command.scope === "cli").map((command) => command.name);
 }
 
+export function getCliCommandDefinitions() {
+  const sharedCommands = getSharedCommandDefinitions().map((command) => ({
+    ...command,
+    scope: "cli",
+    usage: command.usage.replace(/^\/backlog\b/, "backlog"),
+  }));
+  const cliHelpers = getCommandDefinitions().filter((command) => command.scope === "cli");
+  return [...sharedCommands, ...cliHelpers];
+}
+
+export function getCliCommandDefinition(name) {
+  return getCliCommandDefinitions().find((command) => command.name === name) || null;
+}
+
 export function formatCommandHelp(commandName = null) {
   const command = commandName ? getCommandDefinition(commandName) : null;
   if (command) {
@@ -201,6 +229,14 @@ export function formatCommandHelp(commandName = null) {
     lines.push(`  ${entry.name.padEnd(10)} ${entry.description}`);
   }
   return lines.join("\n");
+}
+
+export function formatCliCommandHelp(commandName = null) {
+  const command = commandName ? getCliCommandDefinition(commandName) : null;
+  if (command) {
+    return `${command.name}\n  ${command.description}\n  Usage: ${command.usage}`;
+  }
+  return formatCommandHelp();
 }
 
 export function getToolDefinitions() {

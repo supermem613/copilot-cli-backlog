@@ -227,11 +227,9 @@ export function describeBacklogStatus({ cwd, queues = null, origin = null, workt
     worktreeOrigin: origin ?? worktreeEvidence.worktreeOrigin ?? worktreeEvidence.origin ?? null,
   };
   const resolution = resolveQueue({ cwd: normalizedCwd, worktreeEvidence: evidence });
-  const totalItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId) : 0;
   const pendingItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId, "pending") : 0;
   const doneItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId, "done") : 0;
   const itemCounts = {
-    pending: totalItems,
     done: doneItems,
     pendingItems,
   };

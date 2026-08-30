@@ -1,13 +1,15 @@
 // Slash command parser and dispatcher.
 
-import { createQueue, getQueue, listQueues, updateQueue } from "./db.mjs";
+import { createQueue, getQueue, listQueues, listQueueSummaries, updateQueue } from "./db.mjs";
 import {
   addItem,
   markDone,
   removeItem,
   editItem,
   moveItem,
-  listPendingItems,
+  listItems,
+  listQueueItemCounts,
+  listQueueItems,
   getPendingCount,
   clearQueueItems,
 } from "./items.mjs";
@@ -30,12 +32,49 @@ import { exportBacklogBackup, restoreBacklogBackup } from "./backup.mjs";
 
 export function parseBacklogCommand(input) {
   const text = String(input || "").trim();
-  if (!text) return { cmd: "list", args: [], isTop: false };
-  const parts = text.split(/\s+/);
-  const cmd = parts.shift().toLowerCase();
-  const isTop = parts.includes("--top");
-  const args = parts.filter((part) => part !== "--top");
-  return { cmd, args, isTop };
+  if (!text) return { cmd: "list", args: [], isTop: false, status: "pending", statusError: null };
+  const firstBreak = text.search(/\s/);
+  const cmd = (firstBreak === -1 ? text : text.slice(0, firstBreak)).toLowerCase();
+  let rest = firstBreak === -1 ? "" : text.slice(firstBreak + 1);
+  const args = [];
+  let isTop = false;
+  let status = "pending";
+  let statusError = null;
+
+  if (cmd === "add") {
+    // Keep the description body intact, including newlines. Token-splitting
+    // the whole line turned evidence bundles into one flattened sentence and
+    // made list/sqlite dumps look title-only when the caller had passed more.
+    const topMatch = rest.match(/^--top(?:\s+|$)/);
+    if (topMatch) {
+      isTop = true;
+      rest = rest.slice(topMatch[0].length);
+    }
+    if (rest) args.push(rest);
+    return { cmd, args, isTop, status, statusError };
+  }
+
+  const parts = rest.split(/\s+/).filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part === "--top") {
+      isTop = true;
+      continue;
+    }
+    if (part === "--status" && cmd === "list") {
+      const nextPart = parts[index + 1];
+      if (nextPart && !nextPart.startsWith("--")) {
+        status = nextPart.toLowerCase();
+        index += 1;
+        continue;
+      }
+      statusError = "Missing value for --status";
+      continue;
+    }
+    args.push(part);
+  }
+
+  return { cmd, args, isTop, status, statusError };
 }
 
 function queueIdFromScope(scope) {
@@ -46,9 +85,47 @@ function queueIdFromScope(scope) {
   return (leaf || "backlog").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "backlog";
 }
 
-function formatItems(rows, queueId) {
+function formatItems(rows, queueId, status = "pending") {
   if (rows.length === 0) return `Queue '${queueId}' is empty`;
-  return [`Queue '${queueId}' pending items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
+  const resolvedStatus = String(status || "pending").trim().toLowerCase() || "pending";
+  return [`Queue '${queueId}' ${resolvedStatus} items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
+}
+
+function summarizeQueues(queues) {
+  const countsByQueue = new Map();
+  const queueId = queues.length === 1 ? queues[0].id : null;
+  for (const row of listQueueItemCounts(queueId)) {
+    const itemCounts = countsByQueue.get(row.queue_id) || {};
+    itemCounts[row.status] = row.count;
+    countsByQueue.set(row.queue_id, itemCounts);
+  }
+  return queues.map((queue) => {
+    const itemCounts = countsByQueue.get(queue.id) || {};
+    return {
+      ...queue,
+      itemCount: Object.values(itemCounts).reduce((total, count) => total + count, 0),
+      itemCounts,
+    };
+  });
+}
+
+function formatQueues(queues) {
+  if (queues.length === 0) return "No queues";
+  return queues.map((queue) => {
+    const counts = Object.entries(queue.itemCounts)
+      .map(([status, count]) => `${status}: ${count}`)
+      .join(", ");
+    const suffix = counts ? ` (${counts})` : " (empty)";
+    return `  ${queue.id} - ${queue.name}${queue.description ? ` - ${queue.description}` : ""}${suffix}`;
+  }).join("\n");
+}
+
+function formatQueueDetails(queue, items) {
+  if (items.length === 0) return `Queue '${queue.id}' is empty`;
+  return [
+    `Queue '${queue.name}' [id: ${queue.id}] items:`,
+    ...items.map((item) => `#${item.position} [${item.status}] [${item.id}] ${item.description}`),
+  ].join("\n");
 }
 
 // Item commands return structured envelopes so the CLI can expose machine data
@@ -61,7 +138,7 @@ function domainError(message) {
 }
 
 export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
-  const { cmd, args, isTop } = parseBacklogCommand(rawText);
+  const { cmd, args, isTop, status, statusError } = parseBacklogCommand(rawText);
   const resolveQueueForItemOps = () => resolveItemCommandContext({ cwd });
   const resolveQueueForList = () => {
     const queueId = args[0]?.trim();
@@ -69,6 +146,9 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
     const queue = getQueue(queueId);
     return queue ? { queueId: queue.id } : { error: `Error: Queue '${queueId}' not found` };
   };
+  const normalizedStatus = String(status || "pending").trim().toLowerCase() || "pending";
+
+  if (cmd === "list" && statusError) return domainError(statusError);
 
   switch (cmd) {
     case "add": {
@@ -83,11 +163,14 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
       };
     }
     case "list": {
+      if (normalizedStatus !== "pending" && normalizedStatus !== "done") {
+        return domainError(`Unsupported list status: ${status}`);
+      }
       const queueContext = resolveQueueForList();
       if (queueContext.error) return domainError(queueContext.error);
-      const items = listPendingItems(queueContext.queueId);
+      const items = listItems(queueContext.queueId, normalizedStatus);
       return {
-        output: formatItems(items, queueContext.queueId),
+        output: formatItems(items, queueContext.queueId, normalizedStatus),
         queueId: queueContext.queueId,
         items,
       };
@@ -165,9 +248,21 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
     case "queue": {
       const sub = (args[0] || "list").toLowerCase();
       if (sub === "list") {
-        const queues = listQueues();
-        if (queues.length === 0) return "No queues";
-        return queues.map((queue) => `  ${queue.id} - ${queue.name}${queue.description ? ` - ${queue.description}` : ""}`).join("\n");
+        if (args[1]) {
+          const queue = getQueue(args[1]);
+          if (!queue) return domainError(`Queue '${args[1]}' not found`);
+          const items = listQueueItems(queue.id);
+          return {
+            output: formatQueueDetails(queue, items),
+            queue: summarizeQueues([queue])[0],
+            items,
+          };
+        }
+        const queues = listQueueSummaries();
+        return {
+          output: formatQueues(queues),
+          queues,
+        };
       }
       if (sub === "add" || sub === "create") {
         const queueId = args[1];
@@ -192,7 +287,17 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
         if (!queue) return `Error: Queue '${queueId}' not found`;
         return `Renamed queue '${queue.name}' [id: ${queue.id}]`;
       }
-      return "Error: Usage: /backlog queue list|add|create|edit|rename";
+      if (args.length <= 2 && (!args[1] || args[1].toLowerCase() === "list")) {
+        const queue = getQueue(args[0]);
+        if (!queue) return domainError(`Queue '${args[0]}' not found`);
+        const items = listQueueItems(queue.id);
+        return {
+          output: formatQueueDetails(queue, items),
+          queue: summarizeQueues([queue])[0],
+          items,
+        };
+      }
+      return domainError("Usage: /backlog queue [list [queue-id]|<queue-id> [list]|add|create|edit|rename]");
     }
     case "show": {
       if (!sidecarState.role) tryStartSidecar();

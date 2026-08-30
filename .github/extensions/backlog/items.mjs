@@ -24,16 +24,27 @@ function normalizeQueueId(queueId) {
 }
 
 export function generateId(description) {
-  const base = description
+  // Clamp stays at 50 because ids are CLI argv tokens and sidecar labels.
+  // Trim trailing hyphens after the cut. A mid-token slice was producing
+  // `...staleambiguous-` and collision suffixes became `--2`, so done-by-id
+  // looked truncated and two HALT follow-ups were hard to tell apart.
+  const slug = description
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .trim()
     .replace(/\s+/g, "-")
-    .slice(0, 50);
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const clampBase = (value, max) => {
+    const sliced = String(value || "").slice(0, max).replace(/-+$/g, "");
+    return sliced || "item";
+  };
+  const base = clampBase(slug, 50);
   let id = base;
   let counter = 2;
   while (db.prepare("SELECT 1 FROM items WHERE id = ?").get(id)) {
-    id = `${base}-${counter++}`;
+    const suffix = `-${counter++}`;
+    id = `${clampBase(slug, 50 - suffix.length)}${suffix}`;
   }
   return id;
 }
@@ -48,7 +59,11 @@ export function getNextPosition(queueId) {
 
 export function resolveItemRef(ref, queueId) {
   const queue = normalizeQueueId(queueId);
-  if (/^\d+$/.test(String(ref || ""))) {
+  // A nullish or blank ref must resolve to "no such item" rather than reaching
+  // the driver, which rejects a non-bindable parameter with a raw TypeError.
+  // Callers treat a throw as an execution failure and lose the real cause.
+  if (ref === undefined || ref === null || String(ref).trim() === "") return undefined;
+  if (/^\d+$/.test(String(ref))) {
     const pos = parseInt(ref, 10);
     return db.prepare(
       "SELECT * FROM items WHERE queue_id = ? AND status = ? AND position = ?"
@@ -56,7 +71,7 @@ export function resolveItemRef(ref, queueId) {
   }
   return db.prepare(
     "SELECT * FROM items WHERE id = ? AND queue_id = ?"
-  ).get(ref, queue);
+  ).get(String(ref), queue);
 }
 
 export function reorderPositions(queueId) {
@@ -82,11 +97,104 @@ export function getTopItem(queueId) {
   ).get(queue, "pending");
 }
 
-export function listPendingItems(queueId) {
+export function listItems(queueId, status = "pending") {
   const queue = normalizeQueueId(queueId);
+  const resolvedStatus = String(status || "pending").trim().toLowerCase() || "pending";
   return db.prepare(
     "SELECT id, description, position FROM items WHERE queue_id = ? AND status = ? ORDER BY position"
-  ).all(queue, "pending");
+  ).all(queue, resolvedStatus);
+}
+
+export function listPendingItems(queueId) {
+  return listItems(queueId, "pending");
+}
+
+export function listQueueItemCounts(queueId = null) {
+  const queue = queueId ? String(queueId).trim() : null;
+  const statement = queue ? db.prepare(`
+    SELECT queue_id, COALESCE(status, 'unknown') AS status, COUNT(*) AS count
+    FROM items
+    WHERE queue_id = ?
+    GROUP BY queue_id, COALESCE(status, 'unknown')
+    ORDER BY queue_id, COALESCE(status, 'unknown')
+  `) : db.prepare(`
+    SELECT queue_id, COALESCE(status, 'unknown') AS status, COUNT(*) AS count
+    FROM items
+    WHERE queue_id IS NOT NULL
+    GROUP BY queue_id, COALESCE(status, 'unknown')
+    ORDER BY queue_id, COALESCE(status, 'unknown')
+  `);
+  return queue ? statement.all(queue) : statement.all();
+}
+
+export function listQueueItems(queueId) {
+  const queue = String(queueId || "").trim();
+  if (!queue || !getQueue(queue)) throw new Error(`Queue '${queue}' not found`);
+  return db.prepare(`
+    SELECT
+      i.id,
+      i.description,
+      i.position,
+      i.priority,
+      i.queue_id,
+      COALESCE(i.status, 'unknown') AS status,
+      i.created_at,
+      i.updated_at,
+      p.por_id,
+      p.kind AS por_kind,
+      p.meta_json AS por_meta_json,
+      l.lease_id,
+      l.owner_session,
+      l.repo_root,
+      l.worktree_path,
+      l.heartbeat_at,
+      l.expires_at,
+      l.status AS lease_status,
+      l.needs_recovery
+    FROM items i
+    LEFT JOIN item_pors p ON p.item_id = i.id
+    LEFT JOIN item_leases l ON l.item_id = i.id
+    WHERE i.queue_id = ?
+    ORDER BY
+      CASE WHEN i.status = 'pending' THEN 0 ELSE 1 END,
+      i.status,
+      i.position,
+      i.created_at,
+      i.id
+  `).all(queue).map((row) => {
+    const {
+      por_id,
+      por_kind,
+      por_meta_json,
+      lease_id,
+      owner_session,
+      repo_root,
+      worktree_path,
+      heartbeat_at,
+      expires_at,
+      lease_status,
+      needs_recovery,
+      ...item
+    } = row;
+    return {
+      ...item,
+      por: por_id ? {
+        id: por_id,
+        kind: por_kind,
+        metadata: por_meta_json ? JSON.parse(por_meta_json) : {},
+      } : null,
+      lease: lease_id ? {
+        id: lease_id,
+        owner_session,
+        repo_root,
+        worktree_path,
+        heartbeat_at,
+        expires_at,
+        status: lease_status,
+        needs_recovery: !!needs_recovery,
+      } : null,
+    };
+  });
 }
 
 export function addItem(description, isTop = false, queueId) {
@@ -121,7 +229,7 @@ export function markDone(ref, queueId) {
       "UPDATE items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).run("done", it.id);
     reorderPositions(queue);
-    return it;
+    return { ...it, status: "done" };
   });
   if (item) sidecarBroadcast();
   return item;

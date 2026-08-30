@@ -45,7 +45,7 @@ assertEqual(typeof resolvedResult, "object", "status returns a resolution block"
 assertEqual(resolvedResult.queueId, resolvedQueue.id, "status resolution chooses the bound queue id");
 assertEqual(resolvedResult.matchedBy, "exact", "status resolution reports the exact match reason");
 assertEqual(resolvedResult.canonicalScope, resolvedScope, "status resolution reports the canonical scope");
-assertEqual(resolvedResult.itemCounts.pending, 1, "status resolution reports pending item count");
+assertEqual(resolvedResult.itemCounts.pendingItems, 0, "status resolution reports pending item count");
 assertEqual(resolvedResult.itemCounts.done, 1, "status resolution reports done item count");
 assertEqual(resolvedResult.createdItem, false, "status resolution does not create an item");
 assertEqual(countItems(resolvedQueue.id), beforeResolvedItemCount, "status resolution does not create items");

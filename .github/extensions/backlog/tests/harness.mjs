@@ -4,10 +4,16 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { initBacklog } from "../db.mjs";
 
-export const sandboxDir = mkdtempSync(join(tmpdir(), "backlog-test-"));
+// Canonicalize the sandbox path. On macOS tmpdir() returns a /var/folders
+// symlink whose realpath is /private/var/folders, and process.cwd() always
+// reports the canonical form. Queue bindings compare against process.cwd(),
+// so a non-canonical fixture path would never match after a chdir. Production
+// binds and resolves from the same canonical process.cwd(), so realpath here
+// keeps the fixtures faithful to that invariant.
+export const sandboxDir = realpathSync(mkdtempSync(join(tmpdir(), "backlog-test-")));
 initBacklog(sandboxDir);
 
 // Best-effort cleanup. Not every Node version supports the recursive option

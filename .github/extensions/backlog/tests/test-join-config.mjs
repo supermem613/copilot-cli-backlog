@@ -10,7 +10,7 @@ const statusResolution = {
   queueId: "status-queue",
   canonicalScope: "/tmp/status-scope",
   matchedBy: "exact",
-  itemCounts: { pending: 1, done: 2 },
+  itemCounts: { pendingItems: 1, done: 2 },
   createdItem: false,
 };
 
@@ -53,7 +53,7 @@ assertEqual(JSON.stringify(Object.keys(toolResult).sort()), JSON.stringify(Objec
 assertEqual(toolResult.queueId, commandResult.queueId, "backlog_status handler preserves queueId");
 assertEqual(toolResult.canonicalScope, commandResult.canonicalScope, "backlog_status handler preserves canonicalScope");
 assertEqual(toolResult.matchedBy, commandResult.matchedBy, "backlog_status handler preserves matchedBy");
-assertEqual(toolResult.itemCounts.pending, commandResult.itemCounts.pending, "backlog_status handler preserves pending item count");
+assertEqual(toolResult.itemCounts.pendingItems, commandResult.itemCounts.pendingItems, "backlog_status handler preserves pending item count");
 assertEqual(toolResult.itemCounts.done, commandResult.itemCounts.done, "backlog_status handler preserves done item count");
 assertEqual(toolResult.createdItem, commandResult.createdItem, "backlog_status handler preserves createdItem");
 

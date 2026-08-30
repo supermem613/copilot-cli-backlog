@@ -81,7 +81,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 ```
 /backlog add <description>          # append a new item
 /backlog add --top <description>    # add as position 1
-/backlog list [queue-id]            # show pending items in the resolved or named queue
+/backlog list [queue-id] [--status <value>] # show items in the resolved or named queue (default pending-only)
 /backlog move <id-or-position> <position|top|bottom> # reorder an item
 /backlog done <id-or-position>      # mark complete
 /backlog remove <id-or-position>    # delete without completing
@@ -105,7 +105,10 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 
 Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. `2`).
 Use `/backlog list` to see the current workspace queue, or `/backlog list <queue-id>` to inspect a specific queue from `/backlog queue list`. The first listed item is the next pending item.
+Add `--status <value>` to inspect a different status; omitting it keeps the default pending-only view. Use `--status done` for done items. Unknown status values and `--status` without a value are rejected loudly instead of returning an empty list.
 Use `/backlog move <item> <position|top|bottom>` to reorder a queue.
+
+Unsupported `backlog add` CLI flags are rejected with usage guidance before any item is stored, so the queue stays unchanged.
 
 The current workspace queue is the workspace-resolved queue for the command's `cwd`. Backlog is passive: it stores queue items and does not track live sessions or push work into Copilot.
 
@@ -120,13 +123,23 @@ Run `/backlog init` or `backlog init` from a repo directory to create or reuse a
 The package also installs a `backlog` CLI that mirrors the slash command surface for automation and local tests:
 
 ```
+backlog
+backlog commands
+backlog queues
+backlog queue <queue-id>
+backlog queue <queue-id> list
 backlog status
 backlog init
+backlog list <queue-id> --status done
 backlog add "write the next test" --cwd C:\path\to\repo
 backlog schema
 ```
 
-Use `--cwd <path>` to resolve the queue for a workspace directory. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
+`backlog` and `backlog commands` return the CLI command catalog as structured entries with CLI usage. `backlog queues` returns every queue with total and per-status item counts. `backlog queue <queue-id>` returns the queue plus all of its items, including status, priority, timestamps, POR context, and active lease details when present. The equivalent `backlog queue list <queue-id>` and `backlog queue <queue-id> list` forms are also accepted. Use `backlog queue list <queue-id>` when a queue id matches a mutation verb such as `add` or `rename`.
+
+Use `backlog list <queue-id> [--status <value>]` to inspect a specific status; omit `--status` to keep the default pending-only view. Every CLI command now rejects unrecognized dash-prefixed arguments with a non-zero exit, including `--status` without a value or unsupported status values.
+
+Use `--cwd <path>` to resolve the queue for a workspace directory. Named queue reads do not require a workspace binding. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
 
 Typed CLI data in `data` follows the command shape: `backlog add` returns `data.item` with `id`, `description`, and `position`; `backlog list` returns `data.queueId` and `data.items`; and `backlog edit` returns `data.item`. Supported domain failures return `ok: false`, `data.error`, and process exit code `1`, while successful commands may retain `data.output` display text.
 
@@ -135,10 +148,10 @@ Typed CLI data in `data` follows the command shape: `backlog add` returns `data.
 The agent automatically gets these passive tools:
 
 - `backlog_list` — list all pending items.
-- `backlog_done` — mark an item complete by id or position.
+- `backlog_done` — mark an item complete by item id or position. Pass it as `ref`; `id` is accepted as an alias for the same value.
 - `backlog_status` — inspect which queue is bound to the current workspace.
 
-Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. Add, edit, remove, move, and next-work selection stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
+Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. `backlog_done` validates its item reference in the handler and returns a message naming the cause, so a missing argument, a conflicting `ref`/`id` pair, and an unknown item stay distinguishable from one another. Add, edit, remove, move, and next-work selection stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
 
 ### Permission prompts
 
