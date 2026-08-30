@@ -141,6 +141,8 @@ Use `backlog list <queue-id> [--status <value>]` to inspect a specific status; o
 
 Use `--cwd <path>` to resolve the queue for a workspace directory. Named queue reads do not require a workspace binding. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
 
+Typed CLI data in `data` follows the command shape: `backlog add` returns `data.item` with `id`, `description`, and `position`; `backlog list` returns `data.queueId` and `data.items`; and `backlog edit` returns `data.item`. Supported domain failures return `ok: false`, `data.error`, and process exit code `1`, while successful commands may retain `data.output` display text.
+
 ### Agent-callable tools
 
 The agent automatically gets these passive tools:
