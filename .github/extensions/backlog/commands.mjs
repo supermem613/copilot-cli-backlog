@@ -33,13 +33,28 @@ import { exportBacklogBackup, restoreBacklogBackup } from "./backup.mjs";
 export function parseBacklogCommand(input) {
   const text = String(input || "").trim();
   if (!text) return { cmd: "list", args: [], isTop: false, status: "pending", statusError: null };
-  const parts = text.split(/\s+/);
-  const cmd = parts.shift().toLowerCase();
+  const firstBreak = text.search(/\s/);
+  const cmd = (firstBreak === -1 ? text : text.slice(0, firstBreak)).toLowerCase();
+  let rest = firstBreak === -1 ? "" : text.slice(firstBreak + 1);
   const args = [];
   let isTop = false;
   let status = "pending";
   let statusError = null;
 
+  if (cmd === "add") {
+    // Keep the description body intact, including newlines. Token-splitting
+    // the whole line turned evidence bundles into one flattened sentence and
+    // made list/sqlite dumps look title-only when the caller had passed more.
+    const topMatch = rest.match(/^--top(?:\s+|$)/);
+    if (topMatch) {
+      isTop = true;
+      rest = rest.slice(topMatch[0].length);
+    }
+    if (rest) args.push(rest);
+    return { cmd, args, isTop, status, statusError };
+  }
+
+  const parts = rest.split(/\s+/).filter(Boolean);
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index];
     if (part === "--top") {

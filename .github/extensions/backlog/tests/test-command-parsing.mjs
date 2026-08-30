@@ -58,6 +58,10 @@ const moveOut = await handleBacklogCommand("move 2 1", { cwd: initScope });
 assert(/Moved 'second item' to position 1/.test(moveOut), `move command repositions item, got: ${moveOut}`);
 const movedListOut = await handleBacklogCommand("list", { cwd: initScope });
 assert(/#1 \[[^\]]+\] second item/.test(movedListOut.output), `list reflects moved item order, got: ${movedListOut.output}`);
+const evidence = "POR-GATED title\nQueue: copilot. Evidence Grease ids: abc123\nMANDATE: /root-cause";
+const evidenceOut = await handleBacklogCommand(`add ${evidence}`, { cwd: initScope });
+assert(evidenceOut && evidenceOut.item, `add evidence returned an item envelope, got: ${JSON.stringify(evidenceOut)}`);
+assertEqual(evidenceOut.item.description, evidence, "add keeps newlines in the evidence bundle instead of collapsing to the first line");
 const missingQueueOut = await handleBacklogCommand("list missing-queue");
 assert(/Queue 'missing-queue' not found/.test(missingQueueOut.output), `list reports unknown explicit queue ids, got: ${missingQueueOut.output}`);
 

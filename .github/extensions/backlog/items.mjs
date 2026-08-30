@@ -24,16 +24,27 @@ function normalizeQueueId(queueId) {
 }
 
 export function generateId(description) {
-  const base = description
+  // Clamp stays at 50 because ids are CLI argv tokens and sidecar labels.
+  // Trim trailing hyphens after the cut. A mid-token slice was producing
+  // `...staleambiguous-` and collision suffixes became `--2`, so done-by-id
+  // looked truncated and two HALT follow-ups were hard to tell apart.
+  const slug = description
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .trim()
     .replace(/\s+/g, "-")
-    .slice(0, 50);
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const clampBase = (value, max) => {
+    const sliced = String(value || "").slice(0, max).replace(/-+$/g, "");
+    return sliced || "item";
+  };
+  const base = clampBase(slug, 50);
   let id = base;
   let counter = 2;
   while (db.prepare("SELECT 1 FROM items WHERE id = ?").get(id)) {
-    id = `${base}-${counter++}`;
+    const suffix = `-${counter++}`;
+    id = `${clampBase(slug, 50 - suffix.length)}${suffix}`;
   }
   return id;
 }
@@ -218,7 +229,7 @@ export function markDone(ref, queueId) {
       "UPDATE items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).run("done", it.id);
     reorderPositions(queue);
-    return it;
+    return { ...it, status: "done" };
   });
   if (item) sidecarBroadcast();
   return item;
